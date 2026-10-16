@@ -1,0 +1,6 @@
+{
+  "timeout": 5,
+  "feature_flags": {
+    "search": true
+  }
+}

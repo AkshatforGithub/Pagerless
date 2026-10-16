@@ -1,0 +1,15 @@
+# secrets
+.env
+.env.*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# eval scratch (the results/*.jsonl run files stay tracked as portfolio evidence)
+results/judge_cache.json
+
+# logs
+*.log

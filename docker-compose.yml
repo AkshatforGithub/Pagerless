@@ -1,0 +1,51 @@
+name: sre
+
+services:
+  web:
+    build: ./app
+    container_name: web
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-app}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      APP_VERSION: ${APP_VERSION:-v1}
+    volumes:
+      - ./config:/config:ro
+    tmpfs:
+      - /data:size=50m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

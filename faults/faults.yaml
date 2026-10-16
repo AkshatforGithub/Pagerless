@@ -1,0 +1,75 @@
+- id: crash_exit
+  symptom: web container is down and all endpoints refuse connections
+  root_cause: web process exited with code 1 after a fatal application error, not OOM
+  fix: restart the web container
+  keywords: [exited, code 1, fatal]
+- id: db_stopped
+  symptom: /health returns 503 and /items and /search return 500 with connection refused
+  root_cause: the postgres container was stopped
+  fix: start the postgres container
+  keywords: [postgres, stopped]
+- id: redis_stopped
+  symptom: /cache returns 500 and /health returns 503 with a redis connection error
+  root_cause: the redis container was stopped
+  fix: start the redis container
+  keywords: [redis, stopped]
+- id: wrong_db_password
+  symptom: web logs password authentication failed for user webapp
+  root_cause: web was started with a wrong DB_PASSWORD environment variable
+  fix: recreate web with the correct DB_PASSWORD
+  keywords: [DB_PASSWORD, authentication]
+- id: wrong_db_host
+  symptom: web logs could not translate host name postgress to address
+  root_cause: DB_HOST env var points to a non-existent host (typo postgress) while postgres itself is healthy
+  fix: recreate web with DB_HOST=postgres
+  keywords: [DB_HOST, typo]
+- id: oom_kill
+  symptom: web container exited with code 137 and OOMKilled is true
+  root_cause: web exceeded its 96MB memory limit and was killed by the kernel OOM killer
+  fix: raise the memory limit, find the memory hog, restart web
+  keywords: [OOM, memory limit, 137]
+- id: memory_leak
+  symptom: web memory grows steadily while traffic is flat
+  root_cause: memory leak in the web process, memory keeps growing without being released
+  fix: restart web and fix the leak
+  keywords: [memory, leak, growing]
+- id: cpu_spin
+  symptom: web CPU stays near 100 percent and request latency rises with no errors
+  root_cause: a runaway busy-loop thread inside the web process is burning CPU
+  fix: restart web
+  keywords: [cpu, busy loop, runaway]
+- id: missing_index
+  symptom: /search latency jumps from a few ms to hundreds of ms and slow query warnings appear
+  root_cause: index idx_events_user_id on events(user_id) was dropped so queries do sequential scans
+  fix: recreate the index on events(user_id)
+  keywords: [index, idx_events_user_id, sequential scan]
+- id: conn_exhausted
+  symptom: web logs too many connections for role webapp
+  root_cause: role webapp has a connection limit of 3 that is saturated by long-running idle sessions
+  fix: terminate the long sessions and raise the role connection limit
+  keywords: [connection limit, webapp, sessions]
+- id: disk_full
+  symptom: /write returns 500 and logs say No space left on device
+  root_cause: the 50MB /data tmpfs is full because of a large file /data/fill
+  fix: delete /data/fill
+  keywords: [disk, full, /data/fill]
+- id: port_conflict
+  symptom: web container is not running and fails to start with port is already allocated
+  root_cause: host port 8000 is held by another container named squatter
+  fix: remove the squatter container and start web
+  keywords: [port 8000, squatter, already allocated]
+- id: bad_config
+  symptom: web exits at startup with a JSONDecodeError
+  root_cause: /config/app.json is malformed JSON
+  fix: restore a valid app.json and restart web
+  keywords: [config, JSON, malformed]
+- id: network_partition
+  symptom: web logs could not translate host name postgres but the postgres container is running
+  root_cause: the postgres container was disconnected from the sre_default network
+  fix: reconnect postgres to the sre_default network
+  keywords: [network, disconnected, sre_default]
+- id: bad_deploy
+  symptom: /items returns 500 with KeyError price while other endpoints work
+  root_cause: web was deployed as APP_VERSION v2-bad, which has a bug in /items (KeyError price)
+  fix: roll back to APP_VERSION v1
+  keywords: [v2-bad, KeyError, rollback]
