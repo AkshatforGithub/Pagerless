@@ -34,12 +34,14 @@ def to_openai(t):
 
 
 async def chat(client, **kw):
-    for attempt in range(6):
+    for attempt in range(8):
         try:
             return await client.chat.completions.create(**kw)
-        except RateLimitError:
-            print("rate limited, retrying", attempt + 1, file=sys.stderr, flush=True)
-            await asyncio.sleep(10 * (attempt + 1))
+        except RateLimitError as e:
+            print("rate limited:", str(e)[:300], file=sys.stderr, flush=True)
+            if "per day" in str(e):
+                raise RuntimeError("daily token limit reached; stop and resume later") from e
+            await asyncio.sleep(min(15 * (attempt + 1), 90))
     raise RuntimeError("rate limited too many times")
 
 

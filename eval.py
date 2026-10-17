@@ -9,8 +9,8 @@ CACHE = ROOT / "results" / "judge_cache.json"
 JUDGE_PROMPT = """You grade an SRE agent's root-cause diagnosis.
 TRUE ROOT CAUSE: {truth}
 AGENT DIAGNOSIS: {diag}
-Is the agent's root cause the same underlying problem as the true root cause? A symptom alone (for example 'requests fail with 500') is NOT correct. Extra detail is fine; naming a different component or cause is incorrect.
-Reply with JSON only: {{"correct": true, "reason": "<one sentence>"}} or {{"correct": false, "reason": "<one sentence>"}}"""
+Judge only the root_cause field; the evidence field is context. Is the agent's root cause the same underlying problem as the true root cause? A symptom alone (for example 'requests fail with 500' or 'the container exited') is NOT correct. Extra detail is fine. If the agent asserts a specific cause that the true root cause does not mention or imply (for example a missing variable, a bad config, a resource problem or a false-alarm claim), it is incorrect even when the symptom matches.
+Reply with JSON only: {{"reason": "<one sentence>", "correct": true}} or {{"reason": "<one sentence>", "correct": false}}"""
 
 
 def sh(*cmd):
@@ -34,7 +34,7 @@ async def judge_one(client, judge, truth, diag, cache):
 
 
 def kw_hit(fault, diag):
-    text = json.dumps(diag).lower()
+    text = str(diag.get("root_cause", "")).lower()
     return any(k.lower() in text for k in fault["keywords"])
 
 
@@ -82,6 +82,7 @@ async def main():
     ap.add_argument("--faults", default="", help="comma-separated fault ids (default: all)")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--settle", type=int, default=10)
+    ap.add_argument("--skip-done", action="store_true", help="skip faults already saved for this model and prompt")
     a = ap.parse_args()
     faults = yaml.safe_load(open(ROOT / "faults" / "faults.yaml"))
     if a.faults:
@@ -90,8 +91,18 @@ async def main():
     out.parent.mkdir(exist_ok=True)
     cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     client, rows = AsyncGroq(), []
+    done = set()
+    if a.skip_done:
+        for fn in (ROOT / "results").glob("2*.jsonl"):
+            for line in fn.read_text().splitlines():
+                r = json.loads(line)
+                if r["prompt"] == a.prompt:
+                    done.add((r["model"], r["fault"]))
     for model in a.models.split(","):
         for f in faults:
+            if (model, f["id"]) in done:
+                print("skip (already done):", model, f["id"])
+                continue
             for _ in range(a.runs):
                 row = await trial(f, model, a.prompt, a.judge, client, cache, a.settle)
                 rows.append(row)
@@ -102,4 +113,5 @@ async def main():
     summarize(rows)
     print(f"\nrows saved to {out}")
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
