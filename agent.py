@@ -60,10 +60,10 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
     system = (ROOT / "prompts" / f"{prompt_version}.txt").read_text()
     stats = dict(steps=0, tool_calls=0, tool_errors=0, llm_errors=0, tokens=0, forced=0)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": alert}]
-    diagnosis, t0, forced_notice = None, time.time(), False
+    diagnosis, t0, forced_notice, temp = None, time.time(), False, 0
     async with Client(ROOT / "mcp_server.py") as mcp:
         tools = [to_openai(t) for t in await mcp.list_tools()] + [SUBMIT]
-        for step in range(max_steps + 3):
+        for step in range(max_steps + 6):
             force = step >= max_steps or stats["tokens"] >= token_budget
             choice = "required" if force else "auto"
             if force and not forced_notice:
@@ -73,11 +73,11 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
             stats["steps"] += 1
             try:
                 resp = await chat(client, model=model, messages=messages, tools=[SUBMIT] if force else tools,
-                                  tool_choice=choice, temperature=0)
+                                  tool_choice=choice, temperature=temp)
             except BadRequestError as e:
-                print("LLM error:", str(e)[:400], file=sys.stderr, flush=True)
+                print("LLM error:", str(e)[:400], file=sys.stderr, flush=True); stats["steps"] -= 1; temp = 0.5 if force else temp
                 stats["llm_errors"] += 1
-                messages.append({"role": "user", "content": "Call submit_diagnosis now with your best hypothesis." if force else "Your last tool call was malformed. Call a tool again with valid JSON arguments."})
+                messages.append({"role": "user", "content": "Your last reply was not a tool call. Reply with ONLY a submit_diagnosis tool call, no prose." if force else "Your last tool call was malformed. Call a tool again with valid JSON arguments."})
                 continue
             stats["tokens"] += resp.usage.total_tokens
             msg = resp.choices[0].message
