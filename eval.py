@@ -35,7 +35,7 @@ async def judge_one(client, judge, truth, diag, cache):
 
 def kw_hit(fault, diag):
     text = str(diag.get("root_cause", "")).lower()
-    return any(k.lower() in text for k in fault["keywords"])
+    return any(str(k).lower() in text for k in fault["keywords"])
 
 
 async def trial(fault, model, prompt, judge, client, cache, settle):
@@ -83,6 +83,7 @@ async def main():
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--settle", type=int, default=10)
     ap.add_argument("--skip-done", action="store_true", help="skip faults already saved for this model and prompt")
+    ap.add_argument("--max-trials", type=int, default=0, help="stop after this many new faults (0 = no limit)")
     a = ap.parse_args()
     faults = yaml.safe_load(open(ROOT / "faults" / "faults.yaml"))
     if a.faults:
@@ -92,6 +93,7 @@ async def main():
     cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     client, rows = AsyncGroq(), []
     done = set()
+    ran = 0
     if a.skip_done:
         for fn in (ROOT / "results").glob("2*.jsonl"):
             for line in fn.read_text().splitlines():
@@ -103,6 +105,10 @@ async def main():
             if (model, f["id"]) in done:
                 print("skip (already done):", model, f["id"])
                 continue
+            if a.max_trials and ran >= a.max_trials:
+                print("max-trials reached; rerun later with --skip-done")
+                break
+            ran += 1
             for _ in range(a.runs):
                 row = await trial(f, model, a.prompt, a.judge, client, cache, a.settle)
                 rows.append(row)

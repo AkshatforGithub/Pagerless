@@ -27,7 +27,7 @@
   symptom: web container exited with code 137 and OOMKilled is true
   root_cause: web exceeded its 96MB memory limit and was killed by the kernel OOM killer
   fix: raise the memory limit, find the memory hog, restart web
-  keywords: [OOM, memory limit, 137]
+  keywords: ["OOM", "memory limit", "137"]
 - id: memory_leak
   symptom: web memory grows steadily while traffic is flat
   root_cause: memory leak in the web process, memory keeps growing without being released

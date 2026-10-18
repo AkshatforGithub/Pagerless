@@ -1,0 +1,3 @@
+{"action": "restart_container", "params": {"name": "redis"}, "approved_by": "cli-user", "result": [{"cmd": ["docker", "restart", "redis"], "rc": 0, "out": "redis\n"}], "ts": "2026-10-17T14:59:14"}
+{"action": "restart_container", "params": {"name": "redis"}, "approved_by": "cli-user", "result": [{"cmd": ["docker", "restart", "redis"], "rc": 0, "out": "redis\n"}], "ts": "2026-10-17T14:59:35"}
+{"action": "restart_container", "params": {"name": "redis"}, "approved_by": "cli-user", "result": [{"cmd": ["docker", "restart", "redis"], "rc": 0, "out": "redis\n"}], "ts": "2026-10-17T15:00:05"}

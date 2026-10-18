@@ -1,4 +1,5 @@
 import json, os, re, subprocess, time, urllib.error, urllib.request
+from redact import redact as _redact
 from pathlib import Path
 
 PROJECT = Path(os.getenv("PAGERLESS_DIR", Path(__file__).resolve().parent))
@@ -24,6 +25,7 @@ def _cmd(*cmd):
 
 
 def _clip(text, limit=MAX_CHARS):
+    text = _redact(text)
     if len(text) <= limit:
         return text
     return f"[...{len(text) - limit} chars truncated...]\n" + text[-limit:]
@@ -32,7 +34,7 @@ def _clip(text, limit=MAX_CHARS):
 def get_logs(container: str, tail: int = 80, grep: str = "") -> str:
     """Return recent log lines of a container (newest last). Optional case-insensitive
     grep filter. Works on stopped containers too. Output is truncated to keep it small."""
-    if not NAME_RE.match(container):
+    if not NAME_RE.fullmatch(container):
         return "ERROR: invalid container name"
     tail = max(1, min(int(tail), 500))
     rc, out = _run(["docker", "logs", "--tail", "500" if grep else str(tail), container])
@@ -59,7 +61,7 @@ def container_status(name: str = "") -> str:
             rows.append({"name": c["Names"], "state": c["State"], "status": c["Status"],
                          "ports": c["Ports"], "image": c["Image"]})
         return json.dumps(rows, indent=1)
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         return "ERROR: invalid container name"
     rc, out = _run(["docker", "inspect", name])
     if rc != 0:
