@@ -1,0 +1,59 @@
+Harness note: oom_kill/cpu_spin rows before 20261019-131925 excluded (injection did not fire).
+Rows with llm_errors>0 listed separately as infrastructure failures.
+Rows judged by gpt-oss-120b are flagged JUDGE120 and excluded from totals.
+
+== valid cells: (prompt, fault) -> (correct, forced, run, flags) ==
+('v1', 'bad_config') [(1, '-', '20261018-161217', [])]
+('v1', 'bad_deploy') [(1, 'F', '20261018-161217', [])]
+('v1', 'conn_exhausted') [(1, '-', '20261018-142039', [])]
+('v1', 'cpu_spin') [(1, 'F', '20261019-134305', [])]
+('v1', 'crash_exit') [(0, 'F', '20261017-124823', []), (0, 'F', '20261017-134053', []), (0, 'F', '20261019-211353', [])]
+('v1', 'db_stopped') [(1, '-', '20261017-134053', [])]
+('v1', 'disk_full') [(1, '-', '20261017-124823', [])]
+('v1', 'memory_leak') [(0, 'F', '20261018-142039', [])]
+('v1', 'missing_index') [(1, '-', '20261017-124823', [])]
+('v1', 'network_partition') [(1, '-', '20261018-162945', [])]
+('v1', 'oom_kill') [(1, '-', '20261019-140446', []), (1, '-', '20261019-140821', [])]
+('v1', 'port_conflict') [(1, '-', '20261018-161217', [])]
+('v1', 'redis_stopped') [(1, '-', '20261018-130905', [])]
+('v1', 'wrong_db_host') [(1, '-', '20261018-130905', [])]
+('v1', 'wrong_db_password') [(1, '-', '20261018-130905', [])]
+('v2', 'bad_config') [(1, '-', '20261018-220545', []), (1, '-', '20261018-220545', [])]
+('v2', 'bad_deploy') [(0, '-', '20261019-210351', [])]
+('v2', 'conn_exhausted') [(1, '-', '20261018-220545', []), (1, '-', '20261018-220545', [])]
+('v2', 'cpu_spin') [(0, 'F', '20261019-135949', []), (1, 'F', '20261019-210951', [])]
+('v2', 'crash_exit') [(1, 'F', '20261017-125757', []), (0, 'F', '20261019-145338', ['JUDGE120'])]
+('v2', 'db_stopped') [(1, '-', '20261018-211355', [])]
+('v2', 'disk_full') [(1, '-', '20261017-125757', [])]
+('v2', 'memory_leak') [(1, 'F', '20261019-210648', [])]
+('v2', 'missing_index') [(1, '-', '20261018-211027', [])]
+('v2', 'network_partition') [(1, '-', '20261018-220545', []), (1, '-', '20261018-220545', [])]
+('v2', 'oom_kill') [(1, '-', '20261019-141206', [])]
+('v2', 'port_conflict') [(1, '-', '20261018-220545', []), (1, '-', '20261018-220545', [])]
+('v2', 'redis_stopped') [(1, '-', '20261018-211355', [])]
+('v2', 'wrong_db_host') [(1, '-', '20261018-211355', [])]
+('v2', 'wrong_db_password') [(1, '-', '20261018-211355', [])]
+
+== per prompt, valid rows, JUDGE120 excluded ==
+v1: 14/18 correct, 6/18 forced
+v2: 18/20 correct, 4/20 forced
+
+== excluded rows ==
+('20261017-125757', 'v2', 'missing_index', 0, 'F', ['INFRA'])
+('20261018-142039', 'v1', 'oom_kill', 0, 'F', ['PREFIX', 'INFRA'])
+('20261018-142039', 'v1', 'cpu_spin', 0, 'F', ['PREFIX'])
+('20261018-161217', 'v1', 'network_partition', 0, 'F', ['INFRA'])
+('20261018-162945', 'v1', 'oom_kill', 0, 'F', ['PREFIX'])
+('20261018-211915', 'v2', 'oom_kill', 1, 'F', ['PREFIX', 'INFRA'])
+('20261018-220545', 'v2', 'memory_leak', 0, 'F', ['INFRA'])
+('20261018-220545', 'v2', 'memory_leak', 0, 'F', ['INFRA'])
+('20261018-220545', 'v2', 'cpu_spin', 0, 'F', ['PREFIX', 'INFRA'])
+('20261018-220545', 'v2', 'cpu_spin', 0, 'F', ['PREFIX'])
+('20261019-105223', 'v2', 'memory_leak', 0, 'F', ['INFRA'])
+('20261019-105223', 'v2', 'cpu_spin', 0, 'F', ['PREFIX'])
+('20261019-144938', 'v1', 'crash_exit', 1, 'F', ['INFRA', 'JUDGE120'])
+('20261019-211614', 'v1', 'memory_leak', 0, 'F', ['INFRA'])
+
+== prompt/fault cells with no valid row ==
+v1 []
+v2 []
