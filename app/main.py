@@ -157,10 +157,10 @@ def crash():
 
 @app.get("/admin/leak")
 def leak(mb: int = 100):
-    if mb < 1 or mb > 100:
+    if mb < 1 or mb > 300:
         raise HTTPException(
             status_code=400,
-            detail="mb must be between 1 and 100",
+            detail="mb must be between 1 and 300",
         )
 
     LEAK.append(b"x" * (mb * 1024 * 1024))
@@ -189,10 +189,10 @@ def _spin(seconds):
 
 @app.get("/admin/spin")
 def spin(seconds: int = 60):
-    if seconds < 1 or seconds > 60:
+    if seconds < 1 or seconds > 3600:
         raise HTTPException(
             status_code=400,
-            detail="seconds must be between 1 and 60",
+            detail="seconds must be between 1 and 3600",
         )
 
     threading.Thread(

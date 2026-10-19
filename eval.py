@@ -41,7 +41,33 @@ def kw_hit(fault, diag):
 async def trial(fault, model, prompt, judge, client, cache, settle):
     if sh("./reset.sh").returncode:
         sys.exit("reset.sh failed: stack unhealthy, fix it before evaluating")
-    sh("./inject.sh", fault["id"])
+
+    # Run injection and check for failure
+    inject_result = sh("./inject.sh", fault["id"])
+    if inject_result.returncode != 0:
+        # Injection failed - print loud message, reset, and return injection_failed row
+        print("!!! INJECTION FAILED - Running reset.sh !!!")
+        sh("./reset.sh")
+
+        # Return injection_failed row with all required keys
+        return {
+            "model": model,
+            "prompt": prompt,
+            "diagnosis": None,
+            "seconds": 0.0,
+            "steps": 0,
+            "tool_calls": 0,
+            "tool_errors": 0,
+            "llm_errors": 0,
+            "tokens": 0,
+            "forced": 0,
+            "fault": fault["id"],
+            "correct": False,
+            "judge_reason": "Injection failed",
+            "kw_hit": False,
+            "injection_failed": True
+        }
+
     await asyncio.sleep(settle)
     load = subprocess.Popen(["./loadgen.sh", "180"], cwd=ROOT, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)
@@ -59,12 +85,21 @@ async def trial(fault, model, prompt, judge, client, cache, settle):
 
 
 def summarize(rows):
+    # Separate normal rows from injection_failed rows
+    normal_rows = [r for r in rows if not r.get("injection_failed", False)]
+    failed_rows = [r for r in rows if r.get("injection_failed", False)]
+
     groups = {}
-    for r in rows:
+    for r in normal_rows:
         groups.setdefault((r["model"], r["prompt"]), []).append(r)
+
     print(f"\n{'model':34}{'prompt':8}{'acc':>6}{'kw=judge':>10}{'steps':>7}{'tools':>7}{'tokens':>9}{'secs':>7}")
     for (m, p), rs in groups.items():
         n = len(rs)
+        # Avoid division by zero
+        if n == 0:
+            continue
+
         avg = lambda k: sum(r[k] for r in rs) / n
         print(f"{m:34}{p:8}{sum(r['correct'] for r in rs) / n:>6.0%}"
               f"{sum(r['correct'] == r['kw_hit'] for r in rs) / n:>10.0%}"
@@ -72,6 +107,10 @@ def summarize(rows):
         wrong = sorted({r["fault"] for r in rs if not r["correct"]})
         if wrong:
             print(f"   wrong: {', '.join(wrong)}")
+
+    # Print injection_failed count
+    if failed_rows:
+        print(f"\ninjection_failed: {len(failed_rows)}")
 
 
 async def main():
@@ -98,7 +137,8 @@ async def main():
         for fn in (ROOT / "results").glob("2*.jsonl"):
             for line in fn.read_text().splitlines():
                 r = json.loads(line)
-                if r["prompt"] == a.prompt:
+                # Only consider non-injection_failed rows as "done" for skip-done logic
+                if r["prompt"] == a.prompt and not r.get("injection_failed", False):
                     done.add((r["model"], r["fault"]))
     for model in a.models.split(","):
         for f in faults:
@@ -108,6 +148,7 @@ async def main():
             if a.max_trials and ran >= a.max_trials:
                 print("max-trials reached; rerun later with --skip-done")
                 break
+            # Only count non-injection_failed rows towards max-trials
             ran += 1
             for _ in range(a.runs):
                 row = await trial(f, model, a.prompt, a.judge, client, cache, a.settle)

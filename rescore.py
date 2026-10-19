@@ -10,6 +10,11 @@ async def main(judge, files):
     client, rows = AsyncGroq(), []
     for fn in files:
         for r in map(json.loads, open(fn)):
+            # Skip re-scoring injection_failed rows, but keep them in output
+            if r.get("injection_failed", False):
+                rows.append(r)
+                continue
+
             f, d = faults[r["fault"]], r["diagnosis"]
             if d is None:
                 v = {"correct": False, "reason": "no diagnosis submitted"}
