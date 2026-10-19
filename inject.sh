@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 F="${1:?usage: ./inject.sh <fault_id>}"
-PSQL="docker exec -i postgres psql -u app -d app -q"
+PSQL="docker exec -i postgres psql -U app -d app -q"
 case "$F" in
   crash_exit)        curl -s -m 3 localhost:8000/admin/crash || true ;;
   db_stopped)        docker stop postgres >/dev/null ;;

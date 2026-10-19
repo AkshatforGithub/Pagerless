@@ -13,3 +13,5 @@ results/judge_cache.json
 
 # logs
 *.log
+*.bak
+*.backup
