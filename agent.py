@@ -1,4 +1,4 @@
-import asyncio, json, sys, time
+import asyncio, json, sys, time, uuid, functools
 from pathlib import Path
 from typing import Literal
 from fastmcp import Client
@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, ValidationError
 ROOT = Path(__file__).resolve().parent
 from dotenv import load_dotenv; load_dotenv(ROOT / ".env")
 ALERT = "ALERT: the web service at localhost:8000 is unhealthy or degraded. Find the root cause."
+
+# Safety: agent only has propose_path via MCP, no direct access to execute/approve
+from actions import propose  # noqa: F401 — imported for proposal flow only
 
 
 class Diagnosis(BaseModel):
@@ -56,9 +59,17 @@ async def call_mcp(mcp, call, stats):
 
 
 async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, token_budget=60000):
+    import os
     client = AsyncGroq()  # reads GROQ_API_KEY from the environment
     system = (ROOT / "prompts" / f"{prompt_version}.txt").read_text()
-    stats = dict(steps=0, tool_calls=0, tool_errors=0, llm_errors=0, tokens=0, forced=0)
+    # Per-run investigation ID, also passed to mcp_server.py via SRE_RUN_ID
+    run_id = uuid.uuid4().hex[:16]
+    os.environ["SRE_RUN_ID"] = run_id
+    # Bind the run_id to propose_action in tools.py via the module-level variable
+    from tools import _set_propose_action_run_id
+    _set_propose_action_run_id(run_id)
+    stats = dict(steps=0, tool_calls=0, tool_errors=0, llm_errors=0, tokens=0, forced=0,
+                 run_id=run_id)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": alert}]
     diagnosis, t0, forced_notice, temp = None, time.time(), False, 0
     async with Client(ROOT / "mcp_server.py") as mcp:

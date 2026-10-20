@@ -15,3 +15,6 @@ results/judge_cache.json
 *.log
 *.bak
 *.backup
+
+# temporary pending proposals (not portfolio evidence)
+results/pending/

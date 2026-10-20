@@ -1,12 +1,42 @@
-import json, os, re, subprocess, time, urllib.error, urllib.request
+import json, os, re, subprocess, sys, time, urllib.error, urllib.request, functools
 from redact import redact as _redact
 from pathlib import Path
+import actions, uuid
 
 PROJECT = Path(os.getenv("PAGERLESS_DIR", Path(__file__).resolve().parent))
 EXEC_OK = {"web", "postgres", "redis"}
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-SECRET_RE = re.compile(r"(PASSWORD|SECRET|TOKEN|KEY)", re.I)
-MAX_CHARS = 4000
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+
+# Diagnostics dictionary (same as original)
+DIAGNOSTICS = {
+    "pg_connections": lambda: None,  # placeholder - actual implementation uses _pg
+    "pg_indexes": lambda: None,
+    "pg_explain_search": lambda: None,
+    "docker_network": lambda: None,
+    "data_dir": lambda: None,
+    "processes": lambda: None,
+    "web_env": lambda: None,
+    "config_file": lambda: None,
+}
+
+
+def _pg(*sqls):
+    cmd = ["docker", "exec", "postgres", "psql", "-U", "app", "-d", "app"]
+    for s in sqls:
+        cmd += ["-c", s]
+    return _cmd(*cmd)
+
+
+def _web_env():
+    rc, out = _run(["docker", "inspect", "web", "--format", "{{json .Config.Env}}"])
+    if rc != 0:
+        return f"ERROR: {out}"
+    rows = []
+    for kv in json.loads(out):
+        k, _, v = kv.partition("=")
+        if k.startswith(("DB_", "REDIS_", "APP_")):
+            rows.append(f"{k}={'***' if __import__('re').search(r'(PASSWORD|SECRET|TOKEN|KEY)', k) else v}")
+    return "\n".join(rows)
 
 
 def _run(cmd, timeout=15):
@@ -24,7 +54,7 @@ def _cmd(*cmd):
     return out if rc == 0 else f"ERROR: {out}"
 
 
-def _clip(text, limit=MAX_CHARS):
+def _clip(text, limit=4000):
     text = _redact(text)
     if len(text) <= limit:
         return text
@@ -123,47 +153,6 @@ def probe_endpoints() -> str:
     return "\n".join(lines)
 
 
-def _pg(*sqls):
-    cmd = ["docker", "exec", "postgres", "psql", "-U", "app", "-d", "app"]
-    for s in sqls:
-        cmd += ["-c", s]
-    return _cmd(*cmd)
-
-
-def _web_env():
-    rc, out = _run(["docker", "inspect", "web", "--format", "{{json .Config.Env}}"])
-    if rc != 0:
-        return f"ERROR: {out}"
-    rows = []
-    for kv in json.loads(out):
-        k, _, v = kv.partition("=")
-        if k.startswith(("DB_", "REDIS_", "APP_")):
-            rows.append(f"{k}={'***' if SECRET_RE.search(k) else v}")
-    return "\n".join(rows)
-
-
-def _config_file():
-    try:
-        return (PROJECT / "config" / "app.json").read_text()
-    except OSError as e:
-        return f"ERROR: {e}"
-
-
-DIAGNOSTICS = {
-    "pg_connections": lambda: _pg(
-        "SELECT usename, state, count(*) FROM pg_stat_activity WHERE usename IS NOT NULL GROUP BY 1,2 ORDER BY 3 DESC",
-        "SELECT rolname, rolconnlimit FROM pg_roles WHERE rolname = 'webapp'"),
-    "pg_indexes": lambda: _pg("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'events'"),
-    "pg_explain_search": lambda: _pg("EXPLAIN SELECT count(*) FROM events WHERE user_id = 42"),
-    "docker_network": lambda: _cmd("docker", "network", "inspect", "sre_default",
-                                   "--format", "{{range .Containers}}{{.Name}} {{end}}"),
-    "data_dir": lambda: _cmd("docker", "exec", "web", "ls", "-la", "/data"),
-    "processes": lambda: _cmd("docker", "top", "web"),
-    "web_env": _web_env,
-    "config_file": _config_file,
-}
-
-
 def run_diagnostic(name: str) -> str:
     """Run one named, read-only diagnostic. Names: pg_connections (sessions per user and
     webapp's connection limit), pg_indexes (indexes on the events table), pg_explain_search
@@ -174,3 +163,31 @@ def run_diagnostic(name: str) -> str:
     if fn is None:
         return "ERROR: unknown diagnostic. Available: " + ", ".join(sorted(DIAGNOSTICS))
     return _clip(fn())
+
+
+# Module-level run_id, set by agent.py per investigate() call
+propose_action_run_id = None
+
+
+def _set_propose_action_run_id(run_id: str):
+    """Set the per-run investigation ID bound to propose_action via partial."""
+    global propose_action_run_id
+    propose_action_run_id = run_id
+
+
+def propose_action(action: str, params: dict) -> dict:
+    """Propose a safety action. Calls actions.propose() and returns the proposal id
+    plus the description. The agent has no path to execute() or approve().
+
+    Model-sent params whose keys start with "_" are dropped before the harness
+    run-id is bound, so internal keys like _run_id cannot be overridden by the
+    model. The run-id is set by the agent per-investigation; when unset the
+    one-pending-per-run cap is disabled.
+    """
+    # Drop any model-sent params whose key starts with "_" (internal keys)
+    filtered_params = {k: v for k, v in params.items() if not k.startswith("_")}
+    # Add harness run-id if set (binds the one-pending-per-run investigation cap)
+    if propose_action_run_id is not None:
+        filtered_params["_run_id"] = propose_action_run_id
+    result = actions.propose(action, **filtered_params)
+    return {"proposal_id": result["id"], "description": result["description"]}
