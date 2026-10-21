@@ -79,9 +79,6 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
     system = (ROOT / "prompts" / f"{prompt_version}.txt").read_text()
     # Per-run investigation ID, also passed to mcp_server.py via SRE_RUN_ID
     run_id = uuid.uuid4().hex[:16]
-    # Bind the run_id to propose_action in tools.py via the module-level variable
-    from tools import _set_propose_action_run_id
-    _set_propose_action_run_id(run_id)
     stats = dict(steps=0, tool_calls=0, tool_errors=0, llm_errors=0, tokens=0, forced=0,
                  run_id=run_id)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": alert}]

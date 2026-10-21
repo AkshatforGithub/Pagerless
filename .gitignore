@@ -18,3 +18,6 @@ results/judge_cache.json
 
 # temporary pending proposals (not portfolio evidence)
 results/pending/
+
+# audit records (never commit - per CLAUDE.md hygiene)
+results/audit.jsonl
