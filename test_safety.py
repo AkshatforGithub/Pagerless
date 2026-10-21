@@ -389,61 +389,54 @@ def test_verification_n_a_when_no_container_specified(tmp_path, monkeypatch):
     # name results in verification="n/a" in the audit record
 
 
-def test_env_deliver_propose_action():
-    """Test that propose_action is delivered via SRE_PROPOSE/SRE_RUN_ID env vars
-    and requires run ID for the one-pending-per-run cap."""
-    import subprocess, sys
+def test_server_env_excludes_secrets(monkeypatch):
+    # the tool server must never receive the API key
+    import agent
+    monkeypatch.setenv("GROQ_API_KEY", "not-a-real-key")
+    env = agent.build_server_env("r1", False)
+    assert "GROQ_API_KEY" not in env
+    assert env["SRE_RUN_ID"] == "r1"
+    assert "SRE_PROPOSE" not in env
+    assert agent.build_server_env("r1", True)["SRE_PROPOSE"] == "1"
 
-    # Set SRE_PROPOSE=1 and SRE_RUN_ID in environment
-    env = os.environ.copy()
-    env["SRE_PROPOSE"] = "1"
-    env["SRE_RUN_ID"] = uuid.uuid4().hex[:16]
 
-    # Spawn mcp_server.py with the env vars
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "mcp_server.py")],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-    )
+def test_server_tools_via_real_transport():
+    # spawns the real mcp_server.py the way agent.py does and lists its tools
+    import asyncio
+    import agent
+    from fastmcp import Client
 
-    # Check stderr output has the tool list
-    assert result.returncode == 0, f"mcp_server.py exited with {result.returncode}"
+    async def names(propose):
+        async with Client(agent.make_server_transport("testrun", propose)) as c:
+            return sorted(t.name for t in await c.list_tools())
 
-    stderr_lines = result.stderr.strip().splitlines()
-    # Should have 2 lines: SRE_PROPOSE=... and augmented=...
-    assert len(stderr_lines) >= 2, f"Expected at least 2 stderr lines, got {len(stderr_lines)}: {stderr_lines}"
+    on = asyncio.run(names(True))
+    off = asyncio.run(names(False))
+    assert "propose_action" in on
+    assert "propose_action" not in off
+    assert len(off) == 6
+    assert on == sorted(off + ["propose_action"])
 
-    # Check that augmented list includes propose_action
-    augmented_line = [l for l in stderr_lines if l.startswith("augmented=")]
-    assert len(augmented_line) == 1, f"Expected one augmented line, got: {stderr_lines}"
-    augmented_str = augmented_line[0].split("=", 1)[1]
-    # Format: "[get_logs, container_status, disk_usage, query_metrics, probe_endpoints, run_diagnostic, propose_action]"
-    augmented_names = [n.strip() for n in augmented_str.strip("[]").split(",")]
-    assert "propose_action" in augmented_names, f"propose_action not in augmented tools: {augmented_names}"
 
-    # Verify baseline has 6 tools (not 7)
-    baseline_line = [l for l in stderr_lines if l.startswith("SRE_PROPOSE=")]
-    assert len(baseline_line) == 1, f"Expected one SRE_PROPOSE line, got: {stderr_lines}"
-    baseline_str = baseline_line[0].split("=", 1)[1]
-    baseline_names = [n.strip() for n in baseline_str.strip("[]").split(",")]
-    assert len(baseline_names) == 6, f"Expected 6 baseline tools, got {len(baseline_names)}: {baseline_names}"
+import subprocess as _real_subprocess
 
-    # Now test that propose_action requires run ID
-    from tools import propose_action, _set_propose_action_run_id, propose_action_run_id
 
-    # Save current run ID
-    original_run_id = propose_action_run_id
-    # Clear run ID
-    _set_propose_action_run_id(None)
+class _FakeRunResult:
+    # what a docker call looks like when docker is unreachable
+    returncode = 1
+    stdout = ""
+    stderr = "docker unavailable (test fake)"
 
-    try:
-        try:
-            tools.propose_action("restart_container", {"name": "web"})
-            raise AssertionError("propose_action() should have raised ValueError without run ID")
-        except ValueError as e:
-            assert "run ID" in str(e).lower() or "SRE_RUN_ID" in str(e), f"Unexpected error message: {e}"
-    finally:
-        # Restore run ID
-        _set_propose_action_run_id(original_run_id)
+
+@pytest.fixture(autouse=True)
+def no_real_subprocess(monkeypatch):
+    """No test may run a real command (docker, psql, cp). Tests that need a
+    specific result patch subprocess.run themselves and override this."""
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return _FakeRunResult()
+
+    monkeypatch.setattr(_real_subprocess, "run", fake_run)
+    return calls
