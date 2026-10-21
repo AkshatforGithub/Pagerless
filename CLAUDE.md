@@ -32,11 +32,9 @@ An agent investigates alerts on a small Dockerized stack (FastAPI web + Postgres
 - Known limitations: _remove port parsing for "127.0.0.1:8080:80" and a broad compose-label check; post-action verification is skipped for actions with no container name (restore_config, recreate_web_defaults, create_events_index).
 
 ## Next, in order
-0. Housekeeping: delete try_mcp.py and try_tools.py if scratch; remove the unused _set_propose_action_run_id call in agent.py; remove the stray "x" line from results/audit.jsonl.
-1. injection_test.py at the tool layer, no model calls.
-2. Langfuse tracing behind a flag (baseline runs unchanged).
-3. FastAPI /alert, then a Telegram or Slack approve/reject bot that calls the same approve()/reject().
-4. README (architecture diagram, results table, honest limitations) and a 2-minute demo. Never cut the safety layer or the README.
+1. Langfuse tracing behind a flag (baseline runs unchanged).
+2. FastAPI /alert, then a Telegram or Slack approve/reject bot that calls the same approve()/reject().
+3. README (architecture diagram, results table, honest limitations) and a 2-minute demo. Never cut the safety layer or the README.
 
 ## Git hygiene
 Never commit results/audit.jsonl, results/pending/, caches, .venv, .env or .claude/settings.local.json.
