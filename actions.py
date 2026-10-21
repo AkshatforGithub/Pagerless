@@ -395,11 +395,25 @@ def approve(id, approved_by):
         # For actions without a specific container name, note it
         after_status = "no_container_specified"
 
-    # Determine if still unhealthy: container is not running and not in a healthy state
-    still_unhealthy = after_status not in ("running", "unknown") and after_status != "inspect_failed"
+    # Determine container health verification state.
+    # Values: "healthy" | "unhealthy" | "unverified" | "n/a"
+    if after_status == "no_container_specified":
+        verification = "n/a"
+        still_unhealthy = False
+    elif after_status in ("running",):
+        verification = "healthy"
+        still_unhealthy = False
+    elif after_status in ("inspect_failed", "unknown"):
+        verification = "unverified"
+        still_unhealthy = False
+    else:
+        # oom_killed, stopped(exit=X), or other abnormal states
+        verification = "unhealthy"
+        still_unhealthy = True
 
-    # Store audit line with hash, approver, and pre/post-action status
-    # Capture exception text in error (already done in _run_commands), redact before storage
+    # Store audit line with hash, approver, and pre/post-action status.
+    # Verification field tracks container health state: "healthy" | "unhealthy" | "unverified" | "n/a"
+    # still_unhealthy is True only for "unhealthy" state.
     redacted_out = []
     for entry in out:
         redacted_out.append({
@@ -407,8 +421,7 @@ def approve(id, approved_by):
             "rc": entry["rc"],
             "out": redact(entry["out"]) if isinstance(entry.get("out"), str) else entry.get("out", ""),
         })
-    audit_still = "still unhealthy" if still_unhealthy else ""
-    _audit({
+    audit_record = {
         "action": record["action"],
         "params": record["params"],
         "approved_by": approved_by,
@@ -419,7 +432,9 @@ def approve(id, approved_by):
         "before_status": before_status,
         "after_status": after_status,
         "still_unhealthy": still_unhealthy,
-    })
+        "verification": verification,
+    }
+    _audit(audit_record)
 
     # Mark as executed (single-use)
     record["status"] = "executed"

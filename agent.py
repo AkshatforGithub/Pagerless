@@ -2,6 +2,7 @@ import asyncio, json, sys, time, uuid, functools
 from pathlib import Path
 from typing import Literal
 from fastmcp import Client
+from fastmcp.client.transports import PythonStdioTransport
 from groq import AsyncGroq, BadRequestError, RateLimitError
 from pydantic import BaseModel, Field, ValidationError
 
@@ -58,13 +59,26 @@ async def call_mcp(mcp, call, stats):
         return f"ERROR: tool call failed: {e}"
 
 
+def build_server_env(run_id, propose):
+    """Environment for the tool server: only what it needs, never the API key."""
+    import os
+    env = {k: os.environ[k] for k in ("PATH", "HOME") if k in os.environ}
+    env["SRE_RUN_ID"] = run_id
+    if propose:
+        env["SRE_PROPOSE"] = "1"
+    return env
+
+
+def make_server_transport(run_id, propose):
+    return PythonStdioTransport(ROOT / "mcp_server.py", env=build_server_env(run_id, propose))
+
+
 async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, token_budget=60000):
     import os
     client = AsyncGroq()  # reads GROQ_API_KEY from the environment
     system = (ROOT / "prompts" / f"{prompt_version}.txt").read_text()
     # Per-run investigation ID, also passed to mcp_server.py via SRE_RUN_ID
     run_id = uuid.uuid4().hex[:16]
-    os.environ["SRE_RUN_ID"] = run_id
     # Bind the run_id to propose_action in tools.py via the module-level variable
     from tools import _set_propose_action_run_id
     _set_propose_action_run_id(run_id)
@@ -72,7 +86,7 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
                  run_id=run_id)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": alert}]
     diagnosis, t0, forced_notice, temp = None, time.time(), False, 0
-    async with Client(ROOT / "mcp_server.py") as mcp:
+    async with Client(make_server_transport(run_id, os.environ.get("SRE_PROPOSE") == "1")) as mcp:
         tools = [to_openai(t) for t in await mcp.list_tools()] + [SUBMIT]
         for step in range(max_steps + 6):
             force = step >= max_steps or stats["tokens"] >= token_budget

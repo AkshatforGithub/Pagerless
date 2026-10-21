@@ -24,3 +24,6 @@ _baseline_names = [fn.__name__ for fn in _base_tools]
 _augmented_names = [fn.__name__ for fn in _all_tools]
 print(f"SRE_PROPOSE={os.environ.get('SRE_PROPOSE', 'not set')}: baseline={_baseline_names}", file=sys.stderr)
 print(f"augmented={_augmented_names}", file=sys.stderr)
+
+if __name__ == "__main__":
+    mcp.run()

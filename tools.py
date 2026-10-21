@@ -183,11 +183,18 @@ def propose_action(action: str, params: dict) -> dict:
     run-id is bound, so internal keys like _run_id cannot be overridden by the
     model. The run-id is set by the agent per-investigation; when unset the
     one-pending-per-run cap is disabled.
+
+    Raises ValueError if no run ID is set, to enforce that every investigation
+    has a bound run ID for the one-pending-per-run cap to function.
     """
+    if propose_action_run_id is None:
+        raise ValueError(
+            "propose_action() requires SRE_RUN_ID to be set; "
+            "call _set_propose_action_run_id() from agent.py investigate()."
+        )
     # Drop any model-sent params whose key starts with "_" (internal keys)
     filtered_params = {k: v for k, v in params.items() if not k.startswith("_")}
     # Add harness run-id if set (binds the one-pending-per-run investigation cap)
-    if propose_action_run_id is not None:
-        filtered_params["_run_id"] = propose_action_run_id
+    filtered_params["_run_id"] = propose_action_run_id
     result = actions.propose(action, **filtered_params)
     return {"proposal_id": result["id"], "description": result["description"]}
