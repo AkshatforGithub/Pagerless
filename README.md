@@ -125,33 +125,124 @@ Langfuse tracing is **opt-in** via the `SRE_LANGTRACE=1` environment variable.
 11. **Mocked tests hid a bug**: tests mock `subprocess.run`, and all 8 `DIAGNOSTICS` entries were stubbed in d0c2790 (fixed in fab8cd7). `test_diagnostics.py` fails on the stubbed version.
 12. **db_stopped diagnosis over-reads `docker_network`**: it says postgres is not attached when it is only stopped. The root cause is still correct.
 
-## Project Structure
+## Architecture Diagram
+
+```mermaid
+graph TD
+    %% Styles
+    classDef user fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef mcp fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    classDef actions fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
+    classDef docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
+    classDef approval fill:#fffde7,stroke:#f57f17,stroke-width:2px
+    classDef baseline fill:#fafafa,stroke:#616161,stroke-width:1px,dashed
+
+    %% User / Investigator
+    subgraph User
+        UI[On-call SRE / Investigator]
+    end
+
+    %% Investigation Loop
+    subgraph Investigation["AI Investigation Loop"]
+        A[agent.py: _investigate()]:::agent
+        B[LLM Calls]:::agent
+        C[Tool Calls via MCP]:::agent
+    end
+
+    %% MCP Server
+    subgraph MCP["MCP Server (mcp_server.py)"]
+        M1[tools.get_logs]:::tools
+        M2[tools.container_status]:::tools
+        M3[tools.disk_usage]:::tools
+        M4[tools.query_metrics]:::tools
+        M5[tools.probe_endpoints]:::tools
+        M6[tools.run_diagnostic]:::tools
+        M7[tools.propose_action]:::tools
+    end
+
+    %% Actions/Safety Layer
+    subgraph Actions["actions.py Safety Layer"]
+        P[propose()]:::actions
+        A2[approve()]:::actions
+        H[Hash Verification]:::actions
+        S[Staleness Check (15 min)]:::actions
+        V[Container Status Verification]:::actions
+    end
+
+    %% Docker Stack
+    subgraph Docker["Docker Stack"]
+        WEB[web container:::docker]
+        PG[postgres container:::docker]
+        RD[redis container:::docker]
+        COMPOSE[docker-compose.yml]:::baseline
+    end
+
+    %% Approval Workflow
+    subgraph Approval["Human Approval Workflow"]
+        APPROVE[approve.py CLI]:::approval
+        REJECT[reject.py CLI]:::approval
+    end
+
+    %% Connections
+    UI -->|Alert / Query| A
+    A -->|System Prompt + Tools| B
+    B -->|Tool Calls| C
+    C -->|list_tools, call_tool| M1 & M2 & M3 & M4 & M5 & M6 & M7
+    
+    M1 & M2 & M3 & M4 & M5 & M6 -->|Docker commands| WEB & PG & RD
+    M7 -->|propose_action| P
+    
+    P -->|Pending Proposal Record| H & S & V
+    H -->|Hash Match Check| A2
+    S -->|Staleness Check (>15 min)| A2
+    V -->|Container Status| A2
+    
+    A2 -->|Execute if valid| Docker Stack
+    A2 -->|Write Audit Record| results/audit.jsonl
+    A2 -->|Return to Investigator| UI
+    
+    APPROVE -->|Approve/Reject| A2
+    REJECT -->|Reject| A2
+    
+    %% Connections to evaluation
+    style User fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style mcp fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    style actions fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
+    style docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
+    style approval fill:#fffde7,stroke:#f57f17,stroke-width:2px
+    style baseline fill:#fafafa,stroke:#616161,stroke-width:1px,dashed
+```
+
+## Key Flow Arrows
+
+1. **Investigation Initiation**: On-call SRE presents an alert to the AI agent
+2. **Tool-Enhanced LLM Loop**: Agent calls diagnostic tools through MCP to gather evidence
+3. **Propose Action**: When `SRE_PROPOSE=1`, agent creates a pending proposal via `propose()`
+4. **Safety Gates** (all enforced in `approve()`):
+   - Hash verification (stored vs rebuilt commands)
+   - 15-minute staleness check
+   - Container status before/after verification
+5. **Human Approval**: `approve.py` CLI runs the approved commands in a private sandbox
+6. **Audit Trail**: All outcomes recorded in `results/audit.jsonl`
+
+## Data Flow
 
 ```
-PagerLess/
-├── .claude/              # Claude Code configuration
-├── .env                  # Environment variables (no API keys)
-├── .git/                 # Git repository
-├── .venv/                # Python virtual environment
-├── app/                  # Application code
-├── actions.py            # Proposal/approval logic with safety layer
-├── agent.py              # Main investigation agent with LLM integration
-├── approve.py            # CLI for listing/showing/approving/rejecting proposals
-├── config/               # Configuration (app.json, app.json.good)
-├── docker-compose.yml    # Docker stack definition
-├── eval.py               # Evaluation runner (frozen baseline)
-├── faults/               # 15 injected fault definitions
-├── mcp_server.py         # MCP server exposing diagnostic tools
-├── prompts/              # Investigation prompts (v1, v2)
-├── results/              # Evaluation results and audit trail
-├── test_diagnostics.py   # Tests for diagnostic tools
-├── test_injection.py     # Tests for injection/safety layer
-├── test_safety.py        # Safety layer tests
-├── test_tracing.py       # Langfuse tracing tests
-├── tools.py              # Diagnostic tool implementations
-└── README.md             # This file
+Alert → Agent → [Diagnostic Tools] → Evidence → Root Cause Diagnosis → Propose → 
+Safety Gates → Human Approval → Docker Actions → Audit → Results
 ```
 
+## Critical Security Boundaries
+
+- **Tool Server Isolation**: `mcp_server.py` only receives `PATH`, `HOME`, `SRE_RUN_ID`, and `SRE_PROPOSE` — never the API key
+- **No Direct Execute**: The model can only `propose`; `execute()` is never called
+- **Hash-Gated Commands**: `approve()` rebuilds commands from action+params and verifies hash before running
+- **15-Minute Staleness**: Old proposals are automatically rejected
+```
 ## Getting Started
 
 1. **Verify installation**: `rtk --version` should show the rtk version; `which rtk` verifies the correct binary
