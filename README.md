@@ -104,7 +104,6 @@ Langfuse tracing is **opt-in** via the `SRE_LANGTRACE=1` environment variable.
 3. **Post-action verification skipped for actions without container name**: `restore_config`, `recreate_web_defaults`, and `create_events_index` actions skip post-action verification since they don't operate on a specific container
 4. **Tracing is opt-in and third-party**: with `SRE_LANGTRACE=1`, run data goes to Langfuse. Agent-side `tool_*` spans are not marked as errors when a tool fails.
 5. **Small n**: most per-fault rates are n=1 or 2, so they are indicative only.
-6. **Not a blind comparison**: v2 was written after seeing a v1 failure.
 7. **Harness bugs**: some were found and fixed along the way; affected rows are excluded (see the exclusion rules above).
 8. **LLM judge**: root-cause correctness is scored by a model, not by exact match.
 9. **'Healthy' means running**, not that the service returns correct responses.
@@ -157,9 +156,7 @@ PaperPaging/
 - **Langfuse**: When `SRE_LANGTRACE=1`, the `_Tracer` class in `agent.py` gates Langfuse import. If the langfuse package is not installed, it prints a warning to stderr and continues without failing.
 - **Never edit the frozen baseline**: The eval baseline in `prompts/`, `faults/`, `eval.py`, `rescore.py`, `make_baseline.py`, `results/*.jsonl` is frozen and must not be modified.
 
-## Next Steps (from CLAUDE.md)
+## Next Steps
 
 1. **Eval subset and the v3 prompt**
 2. **FastAPI /alert**, then a Telegram or Slack approve/reject bot that calls the same `approve()`/`reject()`
-3. **README** (architecture diagram, results table, honest limitations) and a 2-minute demo
-4. **Never cut the safety layer or the README**
