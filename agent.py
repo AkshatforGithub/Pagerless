@@ -1,4 +1,5 @@
 import asyncio, json, sys, time, uuid, functools
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Literal
 from fastmcp import Client
@@ -66,9 +67,7 @@ def build_server_env(run_id, propose, langtrace=None):
     env["SRE_RUN_ID"] = run_id
     if propose:
         env["SRE_PROPOSE"] = "1"
-    # Langfuse tracing opt-in behind flag
-    if langtrace and langtrace == "1":
-        env["SRE_LANGTRACE"] = "1"
+    # Langfuse tracing is NOT forwarded to the tool server
     return env
 
 
@@ -76,7 +75,96 @@ def make_server_transport(run_id, propose, langtrace=None):
     return PythonStdioTransport(ROOT / "mcp_server.py", env=build_server_env(run_id, propose, langtrace))
 
 
+class _Tracer:
+    """Opt-in Langfuse tracing. With tracing off every method is a no-op and
+    langfuse is never imported, so baseline runs are unchanged."""
+
+    def __init__(self, enabled, name, **kw):
+        self.lf, self.root, self._stack = None, None, ExitStack()
+        self.meta = dict(kw.get("metadata") or {})
+        if not enabled:
+            return
+        try:
+            from langfuse import get_client
+            self.lf = get_client()
+            self.root = self._stack.enter_context(
+                self.lf.start_as_current_observation(as_type="span", name=name, **kw))
+        except Exception as e:
+            print("WARNING: Langfuse tracing requested but could not start:",
+                  type(e).__name__, str(e)[:200], file=sys.stderr, flush=True)
+            self.lf, self.root = None, None
+            try:
+                self._stack.close()
+            except Exception:
+                pass
+
+    @contextmanager
+    def span(self, name, as_type="span", **kw):
+        """Yields a Langfuse observation, or None when tracing is off or broken."""
+        cm = obs = None
+        if self.lf is not None:
+            try:
+                cm = self.lf.start_as_current_observation(as_type=as_type, name=name, **kw)
+                obs = cm.__enter__()
+            except Exception:
+                cm = obs = None
+        exc = (None, None, None)
+        try:
+            yield obs
+        except BaseException:
+            exc = sys.exc_info()
+            raise
+        finally:
+            if cm is not None:
+                try:
+                    cm.__exit__(*exc)
+                except Exception:
+                    pass
+
+    def update(self, obs, **kw):
+        if obs is None:
+            return
+        try:
+            obs.update(**kw)
+        except Exception:
+            pass
+
+    def set_metadata(self, **kw):
+        self.meta.update(kw)
+        self.update(self.root, metadata=self.meta)
+
+    def close(self, output=None):
+        """End the root span, then flush. Never raises."""
+        if self.lf is None:
+            return
+        if output is not None:
+            self.update(self.root, output=output)
+        try:
+            self._stack.close()
+        except Exception:
+            pass
+        try:
+            self.lf.flush()
+        except Exception:
+            pass
+
+
 async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, token_budget=60000, langtrace=None):
+    import os
+    if langtrace is None:
+        langtrace = os.environ.get("SRE_LANGTRACE") == "1"
+    tr = _Tracer(langtrace in (True, "1"), "investigation", input=alert,
+                 metadata={"model": model, "prompt_version": prompt_version})
+    try:
+        result = await _investigate(tr, model, prompt_version, alert, max_steps, token_budget)
+    except BaseException:
+        tr.close()
+        raise
+    tr.close(output={k: result[k] for k in ("steps", "tool_calls", "tokens", "llm_errors", "forced") if k in result})
+    return result
+
+
+async def _investigate(tr, model, prompt_version="v1", alert=ALERT, max_steps=10, token_budget=60000):
     import os, sys
     client = AsyncGroq()  # reads GROQ_API_KEY from the environment
     system = (ROOT / "prompts" / f"{prompt_version}.txt").read_text()
@@ -86,34 +174,10 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
                  run_id=run_id)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": alert}]
 
-    # --- Langfuse tracing initialization ---
-    langfuse_client = None
-    langfuse_span = None
-    if langtrace and langtrace == "1":
-        try:
-            import langfuse
-            langfuse_client = langfuse.Client()
-            # Create overall investigation span
-            langfuse_span = langfuse_span = langfuse_client.start_as_current_span(
-                f"investigation_{run_id}",
-                attributes={"run_id": run_id, "model": model, "prompt_version": prompt_version}
-            )
-        except Exception:
-            # If langfuse is not installed or configured, gracefully disable tracing
-            langtrace = "0"
-    # -------------------------------------------------------------------------
-
-    messages_copy = messages  # keep reference for span attributes later
+    tr.set_metadata(run_id=run_id)
     diagnosis, t0, forced_notice, temp = None, time.time(), False, 0
 
-    # Helper to create a Langfuse span for each step/tool call (no-op when tracing off)
-    def _lspan(name, attributes=None):
-        if langfuse_span:
-            langfuse_span.update(name=name, attributes=attributes or {})
-        # when langfuse is off, this is a total no-op (evaluates to None / empty)
-        return langfuse_span
-
-    async with Client(make_server_transport(run_id, os.environ.get("SRE_PROPOSE") == "1", langtrace)) as mcp:
+    async with Client(make_server_transport(run_id, os.environ.get("SRE_PROPOSE") == "1")) as mcp:
         tools = [to_openai(t) for t in await mcp.list_tools()] + [SUBMIT]
         for step in range(max_steps + 6):
             force = step >= max_steps or stats["tokens"] >= token_budget
@@ -124,8 +188,14 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
                 messages.append({"role": "user", "content": "Step limit reached. No more investigation is possible. Call submit_diagnosis now with the best-supported root cause from the evidence so far, even if confidence is low."})
             stats["steps"] += 1
             try:
-                resp = await chat(client, model=model, messages=messages, tools=[SUBMIT] if force else tools,
-                                  tool_choice=choice, temperature=temp)
+                with tr.span("llm-call", as_type="generation", model=model, input=messages) as gen:
+                    resp = await chat(client, model=model, messages=messages, tools=[SUBMIT] if force else tools,
+                                      tool_choice=choice, temperature=temp)
+                    if gen is not None:
+                        _m = resp.choices[0].message
+                        tr.update(gen, output=[c.function.name for c in (_m.tool_calls or [])] or (_m.content or ""),
+                                  usage_details={"input_tokens": resp.usage.prompt_tokens,
+                                                 "output_tokens": resp.usage.completion_tokens})
             except BadRequestError as e:
                 print("LLM error:", str(e)[:400], file=sys.stderr, flush=True); stats["steps"] -= 1; temp = 0.5 if force else temp
                 stats["llm_errors"] += 1
@@ -152,18 +222,12 @@ async def investigate(model, prompt_version="v1", alert=ALERT, max_steps=10, tok
                         result = "ERROR: invalid diagnosis format, fix it and resubmit"
                 else:
                     stats["tool_calls"] += 1
-                    result = await call_mcp(mcp, c, stats)
-                # Attach Langfuse span attributes for tool calls (no-op when tracing off)
-                _lspan(f"tool_{c.function.name}", {"tool": c.function.name, "step": step, "status": "ok" if c.function.name != "submit_diagnosis" else "diagnosis"})
+                    with tr.span("tool_" + c.function.name, input=c.function.arguments) as tspan:
+                        result = await call_mcp(mcp, c, stats)
+                        tr.update(tspan, output=result)
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
             if diagnosis:
                 break
-    # Close Langfuse investigation span
-    if langfuse_span:
-        try:
-            langfuse_span.update({"final_step": stats["steps"], "final_tools": stats["tool_calls"], "final_tokens": stats["tokens"], "final_llm_errors": stats["llm_errors"]})
-        except Exception:
-            pass
     return {"model": model, "prompt": prompt_version,
             "diagnosis": diagnosis.model_dump() if diagnosis else None,
             "seconds": round(time.time() - t0, 1), **stats}

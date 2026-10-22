@@ -25,14 +25,17 @@ An agent investigates alerts on a small Dockerized stack (FastAPI web + Postgres
 - Tools run in mcp_server.py, a separate process from agent.py. The server gets only PATH, HOME, SRE_RUN_ID and (when on) SRE_PROPOSE, never the API key.
 - SRE_PROPOSE unset gives the original 6 tools (baseline stays comparable). SRE_PROPOSE=1 adds propose_action.
 - mcp_server.py must end with `if __name__ == "__main__": mcp.run()`. A past edit dropped it and nothing noticed.
-- test_safety.py has an autouse fixture that fakes subprocess.run, so tests never touch real containers.
+- conftest.py has an autouse fixture that fakes subprocess.run, so no test touches real containers. test_injection.py covers attacks through untrusted text at the tool layer.
+- Langfuse tracing is opt-in (SRE_LANGTRACE=1) and lives in the agent process only. The tool server never gets SRE_LANGTRACE or any LANGFUSE_* variable. If tracing cannot start, print one warning to stderr and continue; never fail an investigation. Call flush() at the end of a run.
 
 ## Status (update only with verified results)
-- Safety layer considered done. Last full run: 50 passed.
+- Safety layer done. Last full run reported by Claude Code: 67 passed (50 safety + 17 injection/tracing); the Langfuse tests use mocks only.
+- Housekeeping done: scratch try_*.py deleted; stray audit line and unused run-id call reported removed.
+- Langfuse tracing is NOT working yet: langfuse was not installed in .venv, there were no LANGFUSE_* keys in .env, and agent.py uses a non-documented API (langfuse.Client, start_as_current_span) with no generations and no flush. No real trace has been seen in the Langfuse UI.
 - Known limitations: _remove port parsing for "127.0.0.1:8080:80" and a broad compose-label check; post-action verification is skipped for actions with no container name (restore_config, recreate_web_defaults, create_events_index).
 
 ## Next, in order
-1. Langfuse tracing behind a flag (baseline runs unchanged).
+1. Fix Langfuse tracing with the documented API (get_client(), start_as_current_observation, a generation per model call with usage_details, flush), then confirm ONE real trace in the Langfuse UI. That needs one agent run (about 16-20k tokens): ask first.
 2. FastAPI /alert, then a Telegram or Slack approve/reject bot that calls the same approve()/reject().
 3. README (architecture diagram, results table, honest limitations) and a 2-minute demo. Never cut the safety layer or the README.
 
