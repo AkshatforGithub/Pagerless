@@ -7,16 +7,24 @@ PROJECT = Path(os.getenv("PAGERLESS_DIR", Path(__file__).resolve().parent))
 EXEC_OK = {"web", "postgres", "redis"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 
-# Diagnostics dictionary (same as original)
+
+def _config_file():
+    try:
+        return (PROJECT / "config" / "app.json").read_text()
+    except OSError as e:
+        return f"ERROR: {e}"
+
+
+# Diagnostics restored from d0c2790^ after the stubs were found in a traced run
 DIAGNOSTICS = {
-    "pg_connections": lambda: None,  # placeholder - actual implementation uses _pg
-    "pg_indexes": lambda: None,
-    "pg_explain_search": lambda: None,
-    "docker_network": lambda: None,
-    "data_dir": lambda: None,
-    "processes": lambda: None,
-    "web_env": lambda: None,
-    "config_file": lambda: None,
+    "pg_connections": lambda: _pg("SELECT usename, state, count(*) FROM pg_stat_activity WHERE usename IS NOT NULL GROUP BY 1,2 ORDER BY 3 DESC", "SELECT rolname, rolconnlimit FROM pg_roles WHERE rolname = 'webapp'"),
+    "pg_indexes": lambda: _pg("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'events'"),
+    "pg_explain_search": lambda: _pg("EXPLAIN SELECT count(*) FROM events WHERE user_id = 42"),
+    "docker_network": lambda: _cmd("docker", "network", "inspect", "sre_default", "--format", "{{range .Containers}}{{.Name}} {{end}}"),
+    "data_dir": lambda: _cmd("docker", "exec", "web", "ls", "-la", "/data"),
+    "processes": lambda: _cmd("docker", "top", "web"),
+    "web_env": lambda: _web_env(),
+    "config_file": lambda: _config_file(),
 }
 
 
