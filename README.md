@@ -1,8 +1,22 @@
 # PagerLess: AI Incident-Triage Agent
 
+AI agent that investigates infrastructure failures, identifies root causes, and proposes remediation with human approval.
+
+PagerLess is an AI-assisted incident-response system built around a Dockerized application stack containing FastAPI, PostgreSQL, and Redis.
+
+Instead of relying on a single LLM response, the agent investigates incidents using diagnostic tools, analyzes infrastructure symptoms, and proposes corrective actions through a separate approval mechanism.
+
+Key capabilities
+- Automated diagnosis: Investigates infrastructure failures using logs, container status, metrics, endpoint probes, and other diagnostic tools.
+- Controlled remediation: Separates AI-generated proposals from execution, requiring human approval before corrective actions run.
+- Safety validation: Validates proposals and rejects stale, invalid, or inconsistent requests.
+- Fault-injection evaluation: Tests diagnosis against 15 injected infrastructure failure scenarios.
+- Observability: Supports optional Langfuse tracing for examining model and tool interactions.
+- Auditability: Records operational outcomes and errors, with secret redaction applied to logs and audit records.
+
 ## Overview
 
-**PaperPaging** is a portfolio project implementing an AI agent that investigates alerts on a small Dockerized stack consisting of:
+**PagerLess** is a portfolio project implementing an AI agent that investigates alerts on a small Dockerized stack consisting of:
 - **FastAPI web app** (container: `web`)
 - **Postgres database** (container: `postgres`)
 - **Redis cache** (container: `redis`)
@@ -114,7 +128,7 @@ Langfuse tracing is **opt-in** via the `SRE_LANGTRACE=1` environment variable.
 ## Project Structure
 
 ```
-PaperPaging/
+PagerLess/
 ├── .claude/              # Claude Code configuration
 ├── .env                  # Environment variables (no API keys)
 ├── .git/                 # Git repository
