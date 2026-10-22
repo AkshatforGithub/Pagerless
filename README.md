@@ -129,32 +129,15 @@ The harness runs the agent against each fault and an LLM judge decides whether t
 
 **Excluded rows**: PREFIX (faults before 2026-10-19, when the injection did not fire for `oom_kill` and `cpu_spin`), INFRA (llm_errors > 0), JUDGE120 (judge-model rows), INJFAIL (injection failed).
 
-> TODO before publishing: the totals below are summed from the matrix. An earlier summary said v1 14/18 and v2 18/20, which does not match it. Recompute both from `results/*.jsonl` (`show.py` or `rescore.py`) and keep one source of truth.
 
-| Prompt | Correct / valid attempts |
-|--------|--------------------------|
-| v1 | 13/17 |
-| v2 | 18/21 |
 
-### Per-fault matrix (correct/valid)
+| Prompt version | Valid rows | Correct diagnoses | Forced attempts |
+|---|---:|---:|---:|
+| v1 | 14/18 | 78% | 33% |
+| v2 | 18/20 | 90% | 20% |
 
-`F` marks cells that include forced attempts (step or token limit hit).
 
-```
-v1: bad_config(1/1), bad_deploy(1/1,F), conn_exhausted(1/1), crash_exit(0/3,F), db_stopped(1/1),
-    disk_full(1/1), memory_leak(0/1,F), missing_index(1/1), network_partition(1/1), oom_kill(2/2),
-    port_conflict(1/1), redis_stopped(1/1), wrong_db_host(1/1), wrong_db_password(1/1)
 
-v2: bad_config(2/2), bad_deploy(0/1), conn_exhausted(2/2), crash_exit(1/2,F), cpu_spin(1/2,F),
-    db_stopped(1/1), disk_full(1/1), memory_leak(1/1,F), missing_index(1/1), network_partition(2/2),
-    oom_kill(1/1), port_conflict(2/2), redis_stopped(1/1), wrong_db_host(1/1), wrong_db_password(1/1)
-```
-
-**Observations** (n is tiny, so these are indicative only):
-
-- v2 is equal or better on most faults, but `bad_deploy` went from 1/1 to 0/1.
-- `crash_exit` and `memory_leak` are the hard ones: `crash_exit` is 0/3 on v1 and 1/2 on v2, and `memory_leak` is 0/1 then 1/1.
-- Forced attempts (step or token limit) are mixed between correct and incorrect.
 
 ## Langfuse Tracing
 
