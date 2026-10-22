@@ -38,12 +38,12 @@ The agent has **6 read-only diagnostic tools**, plus a **7th proposal tool** (`p
 
 ```mermaid
 graph TD
-  classDef agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-  classDef tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
-  classDef safety fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
-  classDef docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
-  classDef human fill:#fffde7,stroke:#f57f17,stroke-width:2px
-  classDef planned fill:#fafafa,stroke:#616161,stroke-width:1px,stroke-dasharray:5 5
+  classDef agent fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.5px
+  classDef tools fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.5px
+  classDef safety fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.5px
+  classDef docker fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.5px
+  classDef human fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1.5px
+  classDef planned fill:#ffffff,stroke:#000000,color:#000000,stroke-width:1px,stroke-dasharray:5 5
 
   HARNESS["Eval harness (eval.py)"]:::human
   BOT["FastAPI /alert + Telegram/Slack bot (planned)"]:::planned
@@ -71,7 +71,7 @@ graph TD
   end
 
   HUMAN["Human: approve.py"]:::human
-  AUDIT[("audit trail")]
+  AUDIT[("audit trail")]:::human
 
   HARNESS -->|"alert, run id via env"| AGENT
   AGENT <--> LLM
