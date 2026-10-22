@@ -166,58 +166,21 @@ Tracing is **opt-in** via `SRE_LANGTRACE=1`.
 - **Privacy**: tracing sends prompts and tool output to a third-party service. Keep it off for baseline runs.
 - If the `langfuse` package is not installed, the agent prints a warning to stderr and continues without tracing.
 
-## Known Limitations
-
-1. **`_remove` port parsing**: `_remove` in `actions.py` has limited parsing for "127.0.0.1:8080:80" style port specs from docker-compose.yml.
-2. **Broad compose-label check**: the safety check in `_remove` looks for `com.docker.compose.service` or `com.docker.compose.config-hash` labels, which may match non-compose containers.
-3. **No post-action verification for some actions**: `restore_config`, `recreate_web_defaults` and `create_events_index` don't operate on a specific container, so post-action verification is skipped.
-4. **Tracing is opt-in and third-party**: with `SRE_LANGTRACE=1`, run data goes to Langfuse. Agent-side `tool_*` spans are not marked as errors when a tool fails.
-5. **Small n**: most per-fault rates are n=1 or 2, so they are indicative only.
-6. **Not a blind comparison**: v2 was written after seeing a v1 failure.
-7. **Harness bugs**: some were found and fixed along the way. Affected rows are excluded (see the exclusion rules above).
-8. **LLM judge**: root-cause correctness is scored by a model, not by exact match.
-9. **"Healthy" means running**, not that the service returns correct responses.
-10. **Redaction is pattern-based** and can miss unusual secret formats.
-11. **Mocked tests hid a bug**: tests mock `subprocess.run`, and all 8 `DIAGNOSTICS` entries were stubbed in d0c2790 (fixed in fab8cd7). `test_diagnostics.py` fails on the stubbed version.
-12. **`db_stopped` diagnosis over-reads `docker_network`**: it says postgres is not attached when it is only stopped. The root cause is still correct.
-
-## Project Structure
-
-```
-PaperPaging/
-├── .claude/              # Claude Code configuration
-├── .env                  # local environment variables
-├── app/                  # FastAPI application code
-├── actions.py            # Proposal/approval logic with safety layer
-├── agent.py              # Investigation agent with LLM integration
-├── approve.py            # CLI for listing/showing/approving/rejecting proposals
-├── config/               # app.json, app.json.good
-├── docker-compose.yml    # Docker stack definition
-├── eval.py               # Evaluation runner (frozen baseline)
-├── faults/               # 15 injected fault definitions
-├── mcp_server.py         # MCP server exposing the tools
-├── prompts/              # Investigation prompts (v1, v2)
-├── results/              # Evaluation results and audit trail
-├── test_diagnostics.py   # Diagnostic tool tests
-├── test_injection.py     # Injection/safety tests
-├── test_safety.py        # Safety layer tests
-├── test_tracing.py       # Langfuse tracing tests
-├── tools.py              # Diagnostic tool implementations
-└── README.md
-```
-
-## Getting Started
-
-1. Create and activate the virtualenv, then load the environment (`. .venv/bin/activate && . ./vars.sh`).
-2. Run the tests: `python -m pytest -q`.
-3. Run an evaluation with `eval.py` (see `python eval.py --help` for flags).
-4. Optional tracing: install the `langfuse` package, then set `SRE_LANGTRACE=1` and the `LANGFUSE_*` variables.
-
 ## Development Notes
 
 - **Safety**: the safety layer is the most critical component. Every `approve()` call checks that the proposal is `pending`, that it is not older than 15 minutes, and that the stored commands hash matches the rebuilt commands, and it records container status around the action.
 - **Tests**: tests mock `subprocess.run` so no test touches real containers. As limitation 11 shows, mocks can also hide bugs.
 - **Never edit the frozen baseline**: `prompts/`, `faults/`, `eval.py`, `rescore.py`, `make_baseline.py` and `results/*.jsonl`.
+
+## Known Limitations
+
+1. **`_remove` port parsing**: `_remove` in `actions.py` has limited parsing for "127.0.0.1:8080:80" style port specs from docker-compose.yml.
+2. **Broad compose-label check**: the safety check in `_remove` looks for `com.docker.compose.service` or `com.docker.compose.config-hash` labels, which may match non-compose containers.
+7. **Harness bugs**: some were found and fixed along the way. Affected rows are excluded (see the exclusion rules above).
+8. **LLM judge**: root-cause correctness is scored by a model, not by exact match.
+9. **"Healthy" means running**, not that the service returns correct responses.
+
+
 
 ## Next Steps
 
