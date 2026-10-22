@@ -6,31 +6,93 @@ PagerLess is an AI-assisted incident-response system built around a Dockerized a
 
 Instead of relying on a single LLM response, the agent investigates incidents using diagnostic tools, analyzes infrastructure symptoms, and proposes corrective actions through a separate approval mechanism.
 
-Key capabilities
-- Automated diagnosis: Investigates infrastructure failures using logs, container status, metrics, endpoint probes, and other diagnostic tools.
-- Controlled remediation: Separates AI-generated proposals from execution, requiring human approval before corrective actions run.
-- Safety validation: Validates proposals and rejects stale, invalid, or inconsistent requests.
-- Fault-injection evaluation: Tests diagnosis against 15 injected infrastructure failure scenarios.
-- Observability: Supports optional Langfuse tracing for examining model and tool interactions.
-- Auditability: Records operational outcomes and errors, with secret redaction applied to logs and audit records.
+## Key capabilities
+
+- **Automated diagnosis**: investigates failures using logs, container status, metrics, endpoint probes, and other diagnostic tools.
+- **Controlled remediation**: separates AI-generated proposals from execution; a human must approve before any corrective action runs.
+- **Safety validation**: rejects stale, invalid, or inconsistent proposals.
+- **Fault-injection evaluation**: tests diagnosis against 15 injected infrastructure failures.
+- **Observability**: optional Langfuse tracing for examining model and tool interactions.
+- **Auditability**: records outcomes and errors, with secret redaction applied to logs and audit records.
 
 ## Overview
 
-**PagerLess** is a portfolio project implementing an AI agent that investigates alerts on a small Dockerized stack consisting of:
+PagerLess is a portfolio project. The agent investigates alerts on a small Dockerized stack:
+
 - **FastAPI web app** (container: `web`)
 - **Postgres database** (container: `postgres`)
 - **Redis cache** (container: `redis`)
 
-The agent has **6 read-only diagnostic tools** it can use to investigate alerts, plus a **7th proposal tool** (`propose_action`) that becomes available when `SRE_PROPOSE=1`. The agent can propose fixes but **cannot execute** them — a human must approve via `approve.py`.
+The agent has **6 read-only diagnostic tools**, plus a **7th proposal tool** (`propose_action`) that is available only when `SRE_PROPOSE=1`. The agent can propose fixes but **cannot execute** them. A human must approve via `approve.py`.
 
-### Core Concepts
+### Core concepts
 
 | Concept | Description |
 |---------|-------------|
-| **Diagnostic tools** | Read-only tools: `get_logs`, `container_status`, `disk_usage`, `query_metrics`, `probe_endpoints`, `run_diagnostic` |
-| **Propose action** | When `SRE_PROPOSE=1`, the agent can call `propose_action(action, params)` which creates a pending proposal |
-| **Safety layer** | All proposals go through `propose()` → pending record → `approve()` which verifies hash, staleness (15 min), and runs commands in a private sandbox |
-| **Frozen baseline** | The eval baseline in `prompts/`, `faults/`, `eval.py`, `rescore.py`, etc. must not be edited |
+| **Diagnostic tools** | Read-only: `get_logs`, `container_status`, `disk_usage`, `query_metrics`, `probe_endpoints`, `run_diagnostic` |
+| **Propose action** | With `SRE_PROPOSE=1`, the agent can call `propose_action(action, params)`, which creates a pending proposal |
+| **Safety layer** | Proposals go through `propose()` into a pending record. Only `approve()` runs commands, after checking status, 15-minute age, and a hash of the commands |
+| **Frozen baseline** | The eval baseline in `prompts/`, `faults/`, `eval.py`, `rescore.py`, `make_baseline.py` and `results/*.jsonl` must not be edited |
+
+## Architecture
+
+```mermaid
+graph TD
+  classDef agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+  classDef tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+  classDef safety fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
+  classDef docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
+  classDef human fill:#fffde7,stroke:#f57f17,stroke-width:2px
+  classDef planned fill:#fafafa,stroke:#616161,stroke-width:1px,stroke-dasharray:5 5
+
+  HARNESS["Eval harness (eval.py)"]:::human
+  BOT["FastAPI /alert + Telegram/Slack bot (planned)"]:::planned
+  LF["Langfuse (opt-in)"]:::planned
+
+  subgraph AG["Agent"]
+    AGENT["agent.py: investigation loop"]:::agent
+    LLM["LLM calls (Groq gpt-oss)"]:::agent
+  end
+
+  subgraph MCP["MCP tool server (mcp_server.py, tools.py)"]
+    RO["6 read-only diagnostic tools"]:::tools
+    PA["propose_action (only if SRE_PROPOSE=1)"]:::tools
+  end
+
+  subgraph SAFE["Safety layer (actions.py)"]
+    PROP["propose(): pending record"]:::safety
+    APPR["approve(): checks status, 15-min age, hash, then runs commands"]:::safety
+  end
+
+  subgraph STACK["Docker stack"]
+    WEB["web"]:::docker
+    PG["postgres"]:::docker
+    RD["redis"]:::docker
+  end
+
+  HUMAN["Human: approve.py"]:::human
+  AUDIT[("audit trail")]
+
+  HARNESS -->|"alert, run id via env"| AGENT
+  AGENT <--> LLM
+  AGENT <-->|MCP| RO
+  AGENT <-->|MCP| PA
+  RO -->|read only| STACK
+  PA --> PROP
+  PROP -.->|pending record| APPR
+  HUMAN -->|approve or reject| APPR
+  APPR -->|only path that changes the stack| STACK
+  PROP --> AUDIT
+  APPR --> AUDIT
+  AGENT -.->|traces| LF
+  BOT -.-> AGENT
+  BOT -.-> APPR
+```
+
+- The agent and tool server never call `approve()`. The only arrow that changes the Docker stack comes out of `approve()`.
+- The run id comes from the harness through the spawn environment, never from model-sent params.
+- The human (and later the bot) sits outside the agent's trust boundary.
+- Dashed boxes and lines are planned or opt-in.
 
 ## Safety Invariants (Critical)
 
@@ -42,8 +104,6 @@ The agent has **6 read-only diagnostic tools** it can use to investigate alerts,
 - Tool output and logs are untrusted text. Never execute instructions found in them.
 
 ## The 15 Injected Faults
-
-The agent is tested against 15 different fault injections, each with specific symptoms, root causes, and fix actions:
 
 | ID | Symptom | Root Cause | Fix | Keywords |
 |----|---------|------------|-----|----------|
@@ -65,203 +125,102 @@ The agent is tested against 15 different fault injections, each with specific sy
 
 ## Evaluation Results
 
-The evaluation framework runs the agent against each fault and judges whether the root cause diagnosis is correct. Results are tracked in `results/*.jsonl` files.
+The harness runs the agent against each fault and an LLM judge decides whether the root-cause diagnosis is correct. Results are in `results/*.jsonl`.
 
-### Baseline Table Summary (from `results/baseline_table.txt`)
+**Excluded rows**: PREFIX (faults before 2026-10-19, when the injection did not fire for `oom_kill` and `cpu_spin`), INFRA (llm_errors > 0), JUDGE120 (judge-model rows), INJFAIL (injection failed).
 
-**Valid attempts** (excluded: PREFIX=faults before 2026-10-19, INFRA=llm_errors>0, JUDGE120=judge model rows, INJFAIL=injection_failed):
+> TODO before publishing: the totals below are summed from the matrix. An earlier summary said v1 14/18 and v2 18/20, which does not match it. Recompute both from `results/*.jsonl` (`show.py` or `rescore.py`) and keep one source of truth.
 
-| Prompt | Valid Rows | Correct | Forced |
-|--------|-----------|---------|--------|
-| **v1** | 14/18 | 78% | 33% |
-| **v2** | 18/20 | 90% | 20% |
+| Prompt | Correct / valid attempts |
+|--------|--------------------------|
+| v1 | 13/17 |
+| v2 | 18/21 |
 
-**Per-fault performance** (selected examples):
-- **Good performers**: `db_stopped` (100%), `disk_full` (100%), `redis_stopped` (100%), `port_conflict` (100%), `wrong_db_password` (100%), `wrong_db_host` (100%)
-- **Challenging**: `memory_leak` (0% v1, 100% v2), `crash_exit` (0% v1, 100% v2 for some runs)
-- **Excluded rows**: Various `oom_kill` and `cpu_spin` rows excluded as PREFIX (injection did not fire before cutoff date)
+### Per-fault matrix (correct/valid)
 
-### Full per-(prompt,fault) matrix
+`F` marks cells that include forced attempts (step or token limit hit).
 
 ```
-v1: bad_config(1/1), bad_deploy(1/1,F), conn_exhausted(1/1), crash_exit(0/3,F), db_stopped(1/1), 
-    disk_full(1/1), memory_leak(0/1,F), missing_index(1/1), network_partition(1/1), oom_kill(2/2,-),
+v1: bad_config(1/1), bad_deploy(1/1,F), conn_exhausted(1/1), crash_exit(0/3,F), db_stopped(1/1),
+    disk_full(1/1), memory_leak(0/1,F), missing_index(1/1), network_partition(1/1), oom_kill(2/2),
     port_conflict(1/1), redis_stopped(1/1), wrong_db_host(1/1), wrong_db_password(1/1)
 
-v2: bad_config(2/2,-), bad_deploy(0/1,-), conn_exhausted(2/2,-), crash_exit(1/2,F), cpu_spin(1/2,F),
-    db_stopped(1/1), disk_full(1/1), memory_leak(1/1,F), missing_index(1/1), network_partition(2/2,-),
-    oom_kill(1/1,-), port_conflict(2/2,-), redis_stopped(1/1), wrong_db_host(1/1), wrong_db_password(1/1)
+v2: bad_config(2/2), bad_deploy(0/1), conn_exhausted(2/2), crash_exit(1/2,F), cpu_spin(1/2,F),
+    db_stopped(1/1), disk_full(1/1), memory_leak(1/1,F), missing_index(1/1), network_partition(2/2),
+    oom_kill(1/1), port_conflict(2/2), redis_stopped(1/1), wrong_db_host(1/1), wrong_db_password(1/1)
 ```
 
-**Key observations**:
-- v2 generally performs better or equal to v1
-- Some faults are consistently hard ( `crash_exit`, `memory_leak`)
-- Forced attempts (hitting step/token limits) have variable success rates
-- `oom_kill` and `cpu_spin` rows before 2026-10-19 were excluded because the injection did not fire
+**Observations** (n is tiny, so these are indicative only):
+
+- v2 is equal or better on most faults, but `bad_deploy` went from 1/1 to 0/1.
+- `crash_exit` and `memory_leak` are the hard ones: `crash_exit` is 0/3 on v1 and 1/2 on v2, and `memory_leak` is 0/1 then 1/1.
+- Forced attempts (step or token limit) are mixed between correct and incorrect.
 
 ## Langfuse Tracing
 
-Langfuse tracing is **opt-in** via the `SRE_LANGTRACE=1` environment variable.
+Tracing is **opt-in** via `SRE_LANGTRACE=1`.
 
-- **Default**: Off (`SRE_LANGTRACE` unset) — baseline runs are completely unaffected
-- **When enabled**: The `_Tracer` class in `agent.py` creates observations spans for LLM calls and tool calls
-- **Documented API**: Use `get_client()`, `start_as_current_observation()` with `as_type="generation"`, one generation per model call with `usage_details`, and `flush()` at the end of a run
-- **Verified**: on one real run (db_stopped, prompt v2; 23,409 tokens, 0 tool errors) the Langfuse trace matched the harness: nested spans, one generation per model call, per-call tokens summing to the harness total. One run only.
-- **Privacy**: tracing is opt-in and sends prompts and tool output to a third-party service. Keep it off for baseline runs.
-
-**Code gate** (in `agent.py` `build_server_env()`): Langfuse tracing is NOT forwarded to the tool server — only `PATH`, `HOME`, `SRE_RUN_ID`, and (when `SRE_PROPOSE=1`) `SRE_PROPOSE` are sent to the tool server.
+- **Default**: off. Baseline runs are unaffected.
+- **When enabled**: the `_Tracer` class in `agent.py` creates spans for LLM calls and tool calls, using the documented Langfuse API: `get_client()`, `start_as_current_observation()` with `as_type="generation"`, one generation per model call with `usage_details`, and `flush()` at the end of a run.
+- **Verified**: on one real run (`db_stopped`, prompt v2; 23,409 tokens, 0 tool errors) the trace matched the harness: nested spans, one generation per model call, per-call tokens summing to the harness total. One run only.
+- **Privacy**: tracing sends prompts and tool output to a third-party service. Keep it off for baseline runs.
+- If the `langfuse` package is not installed, the agent prints a warning to stderr and continues without tracing.
 
 ## Known Limitations
 
-1. **_remove port parsing**: The `_remove` function in `actions.py` has limited parsing for "127.0.0.1:8080:80" style port specifications from docker-compose.yml
-2. **Broad compose-label check**: The safety check in `_remove` checks for `com.docker.compose.service` or `com.docker.compose.config-hash` labels, which may match non-compose containers
-3. **Post-action verification skipped for actions without container name**: `restore_config`, `recreate_web_defaults`, and `create_events_index` actions skip post-action verification since they don't operate on a specific container
+1. **`_remove` port parsing**: `_remove` in `actions.py` has limited parsing for "127.0.0.1:8080:80" style port specs from docker-compose.yml.
+2. **Broad compose-label check**: the safety check in `_remove` looks for `com.docker.compose.service` or `com.docker.compose.config-hash` labels, which may match non-compose containers.
+3. **No post-action verification for some actions**: `restore_config`, `recreate_web_defaults` and `create_events_index` don't operate on a specific container, so post-action verification is skipped.
 4. **Tracing is opt-in and third-party**: with `SRE_LANGTRACE=1`, run data goes to Langfuse. Agent-side `tool_*` spans are not marked as errors when a tool fails.
 5. **Small n**: most per-fault rates are n=1 or 2, so they are indicative only.
-7. **Harness bugs**: some were found and fixed along the way; affected rows are excluded (see the exclusion rules above).
+6. **Not a blind comparison**: v2 was written after seeing a v1 failure.
+7. **Harness bugs**: some were found and fixed along the way. Affected rows are excluded (see the exclusion rules above).
 8. **LLM judge**: root-cause correctness is scored by a model, not by exact match.
-9. **'Healthy' means running**, not that the service returns correct responses.
+9. **"Healthy" means running**, not that the service returns correct responses.
 10. **Redaction is pattern-based** and can miss unusual secret formats.
 11. **Mocked tests hid a bug**: tests mock `subprocess.run`, and all 8 `DIAGNOSTICS` entries were stubbed in d0c2790 (fixed in fab8cd7). `test_diagnostics.py` fails on the stubbed version.
-12. **db_stopped diagnosis over-reads `docker_network`**: it says postgres is not attached when it is only stopped. The root cause is still correct.
+12. **`db_stopped` diagnosis over-reads `docker_network`**: it says postgres is not attached when it is only stopped. The root cause is still correct.
 
-## Architecture Diagram
-
-```mermaid
-graph TD
-    %% Styles
-    classDef user fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-    classDef mcp fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    classDef tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
-    classDef actions fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
-    classDef docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
-    classDef approval fill:#fffde7,stroke:#f57f17,stroke-width:2px
-    classDef baseline fill:#fafafa,stroke:#616161,stroke-width:1px,dashed
-
-    %% User / Investigator
-    subgraph User
-        UI[On-call SRE / Investigator]
-    end
-
-    %% Investigation Loop
-    subgraph Investigation["AI Investigation Loop"]
-        A[agent.py: _investigate()]:::agent
-        B[LLM Calls]:::agent
-        C[Tool Calls via MCP]:::agent
-    end
-
-    %% MCP Server
-    subgraph MCP["MCP Server (mcp_server.py)"]
-        M1[tools.get_logs]:::tools
-        M2[tools.container_status]:::tools
-        M3[tools.disk_usage]:::tools
-        M4[tools.query_metrics]:::tools
-        M5[tools.probe_endpoints]:::tools
-        M6[tools.run_diagnostic]:::tools
-        M7[tools.propose_action]:::tools
-    end
-
-    %% Actions/Safety Layer
-    subgraph Actions["actions.py Safety Layer"]
-        P[propose()]:::actions
-        A2[approve()]:::actions
-        H[Hash Verification]:::actions
-        S[Staleness Check (15 min)]:::actions
-        V[Container Status Verification]:::actions
-    end
-
-    %% Docker Stack
-    subgraph Docker["Docker Stack"]
-        WEB[web container:::docker]
-        PG[postgres container:::docker]
-        RD[redis container:::docker]
-        COMPOSE[docker-compose.yml]:::baseline
-    end
-
-    %% Approval Workflow
-    subgraph Approval["Human Approval Workflow"]
-        APPROVE[approve.py CLI]:::approval
-        REJECT[reject.py CLI]:::approval
-    end
-
-    %% Connections
-    UI -->|Alert / Query| A
-    A -->|System Prompt + Tools| B
-    B -->|Tool Calls| C
-    C -->|list_tools, call_tool| M1 & M2 & M3 & M4 & M5 & M6 & M7
-    
-    M1 & M2 & M3 & M4 & M5 & M6 -->|Docker commands| WEB & PG & RD
-    M7 -->|propose_action| P
-    
-    P -->|Pending Proposal Record| H & S & V
-    H -->|Hash Match Check| A2
-    S -->|Staleness Check (>15 min)| A2
-    V -->|Container Status| A2
-    
-    A2 -->|Execute if valid| Docker Stack
-    A2 -->|Write Audit Record| results/audit.jsonl
-    A2 -->|Return to Investigator| UI
-    
-    APPROVE -->|Approve/Reject| A2
-    REJECT -->|Reject| A2
-    
-    %% Connections to evaluation
-    style User fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style agent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-    style mcp fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    style tools fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
-    style actions fill:#ffe0b2,stroke:#bf360c,stroke-width:2px
-    style docker fill:#e3f2fd,stroke:#01579b,stroke-width:2px
-    style approval fill:#fffde7,stroke:#f57f17,stroke-width:2px
-    style baseline fill:#fafafa,stroke:#616161,stroke-width:1px,dashed
-```
-
-## Key Flow Arrows
-
-1. **Investigation Initiation**: On-call SRE presents an alert to the AI agent
-2. **Tool-Enhanced LLM Loop**: Agent calls diagnostic tools through MCP to gather evidence
-3. **Propose Action**: When `SRE_PROPOSE=1`, agent creates a pending proposal via `propose()`
-4. **Safety Gates** (all enforced in `approve()`):
-   - Hash verification (stored vs rebuilt commands)
-   - 15-minute staleness check
-   - Container status before/after verification
-5. **Human Approval**: `approve.py` CLI runs the approved commands in a private sandbox
-6. **Audit Trail**: All outcomes recorded in `results/audit.jsonl`
-
-## Data Flow
+## Project Structure
 
 ```
-Alert → Agent → [Diagnostic Tools] → Evidence → Root Cause Diagnosis → Propose → 
-Safety Gates → Human Approval → Docker Actions → Audit → Results
+PaperPaging/
+├── .claude/              # Claude Code configuration
+├── .env                  # local environment variables
+├── app/                  # FastAPI application code
+├── actions.py            # Proposal/approval logic with safety layer
+├── agent.py              # Investigation agent with LLM integration
+├── approve.py            # CLI for listing/showing/approving/rejecting proposals
+├── config/               # app.json, app.json.good
+├── docker-compose.yml    # Docker stack definition
+├── eval.py               # Evaluation runner (frozen baseline)
+├── faults/               # 15 injected fault definitions
+├── mcp_server.py         # MCP server exposing the tools
+├── prompts/              # Investigation prompts (v1, v2)
+├── results/              # Evaluation results and audit trail
+├── test_diagnostics.py   # Diagnostic tool tests
+├── test_injection.py     # Injection/safety tests
+├── test_safety.py        # Safety layer tests
+├── test_tracing.py       # Langfuse tracing tests
+├── tools.py              # Diagnostic tool implementations
+└── README.md
 ```
 
-## Critical Security Boundaries
-
-- **Tool Server Isolation**: `mcp_server.py` only receives `PATH`, `HOME`, `SRE_RUN_ID`, and `SRE_PROPOSE` — never the API key
-- **No Direct Execute**: The model can only `propose`; `execute()` is never called
-- **Hash-Gated Commands**: `approve()` rebuilds commands from action+params and verifies hash before running
-- **15-Minute Staleness**: Old proposals are automatically rejected
-```
 ## Getting Started
 
-1. **Verify installation**: `rtk --version` should show the rtk version; `which rtk` verifies the correct binary
-2. **Run the test suite**: `python -m pytest -q` — all 83 tests should pass
-3. **Run a single evaluation**: `python -m pytest test_injection.py -q` or use `eval.py` with appropriate flags
-4. **Langfuse tracing** (optional): Install langfuse SDK and set `SRE_LANGTRACE=1` and `LANGFUSE_*` environment variables
+1. Create and activate the virtualenv, then load the environment (`. .venv/bin/activate && . ./vars.sh`).
+2. Run the tests: `python -m pytest -q`.
+3. Run an evaluation with `eval.py` (see `python eval.py --help` for flags).
+4. Optional tracing: install the `langfuse` package, then set `SRE_LANGTRACE=1` and the `LANGFUSE_*` variables.
 
 ## Development Notes
 
-- **Safety**: The safety layer is the most critical component. Every `approve()` call verifies:
-  1. Proposal status is `pending`
-  2. Proposal is not stale (>15 minutes old)
-  3. Stored commands hash matches rebuilt commands hash
-  4. Container status before/after the action
-- **Tests**: All tests mock `subprocess.run` to prevent real docker commands from running. The `conftest.py` fixture in `test_safety.py` and `test_injection.py` ensures no test touches real containers.
-- **Langfuse**: When `SRE_LANGTRACE=1`, the `_Tracer` class in `agent.py` gates Langfuse import. If the langfuse package is not installed, it prints a warning to stderr and continues without failing.
-- **Never edit the frozen baseline**: The eval baseline in `prompts/`, `faults/`, `eval.py`, `rescore.py`, `make_baseline.py`, `results/*.jsonl` is frozen and must not be modified.
+- **Safety**: the safety layer is the most critical component. Every `approve()` call checks that the proposal is `pending`, that it is not older than 15 minutes, and that the stored commands hash matches the rebuilt commands, and it records container status around the action.
+- **Tests**: tests mock `subprocess.run` so no test touches real containers. As limitation 11 shows, mocks can also hide bugs.
+- **Never edit the frozen baseline**: `prompts/`, `faults/`, `eval.py`, `rescore.py`, `make_baseline.py` and `results/*.jsonl`.
 
 ## Next Steps
 
-1. **Eval subset and the v3 prompt**
-2. **FastAPI /alert**, then a Telegram or Slack approve/reject bot that calls the same `approve()`/`reject()`
+1. Eval subset and the v3 prompt.
+2. FastAPI `/alert`, then a Telegram or Slack approve/reject bot that calls the same `approve()`/`reject()`.
+3. Two-minute demo.
